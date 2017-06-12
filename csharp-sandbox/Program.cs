@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 
 namespace csharpsandbox {
   static class MainClass {
@@ -22,47 +23,60 @@ namespace csharpsandbox {
 
     static async Task AsyncPipeSandbox() {
       using(var ct = new CancellationTokenSource()){
+        var msgQue = new ConcurrentQueue<bool>();
+        var retQue = new ConcurrentQueue<byte[]>();
         var reader = new Task(() => {
-          Console.WriteLine("starting task");
           var proc = new Process();
           proc.StartInfo.FileName = @"node";
-          proc.StartInfo.Arguments = @"-e 'setInterval(()=>process.stdout.write(""""+Date.now()+""\\n""),10);'";
+          proc.StartInfo.Arguments = @"-e 'i=0;setInterval(function(){process.stdout.write((i++)+"":""+Date.now()+""\\n"")},10);'";
           proc.StartInfo.UseShellExecute = false;
           proc.StartInfo.RedirectStandardInput = true;
           proc.StartInfo.RedirectStandardOutput = true;
           proc.StartInfo.RedirectStandardError = true;
           proc.Start();
-          Console.WriteLine("proc started");
+          var que = new Queue<Byte>();
           using(var br = new BinaryReader(proc.StandardOutput.BaseStream)) {
-            try {
-              while(!ct.IsCancellationRequested) {
-                var bytes = br.ReadBytes(1);
-                var str = System.Text.Encoding.ASCII.GetString(bytes);
-                Console.Write(str);
+            while(!ct.IsCancellationRequested) {
+              que.Enqueue(br.ReadByte());
+              bool flag;
+              while(msgQue.Count > 0 && msgQue.TryDequeue(out flag)) {
+                retQue.Enqueue(que.ToArray());
+                que.Clear();
               }
-            } catch(EndOfStreamException err) {
-              Console.WriteLine("Error writing the data.");
-              Console.WriteLine("{0}: {1}: {2}", err.GetType().Name, err.Message);
-              proc.Close();
-              return;
             }
           }
-                    proc.Close();
-                    ct.Token.ThrowIfCancellationRequested();
+          Console.WriteLine("cancelled.");
+          proc.Close();
+          retQue.Enqueue(que.ToArray()); // last
+          que.Clear();
+          ct.Token.ThrowIfCancellationRequested();
         });
-
-        reader.Start();
-        Console.WriteLine("task started");
-        await Task.Delay(1 * 1000);
+        byte[] readBuf;
         try {
+          reader.Start();
+          for(var i = 0; i < 10; i++) {
+            await Task.Delay(1 * 1000);
+            Console.WriteLine("try read({0})", i);
+            msgQue.Enqueue(true);
+
+            while(retQue.Count > 0 && retQue.TryDequeue(out readBuf)) {
+              var str = System.Text.Encoding.ASCII.GetString(readBuf);
+              Console.WriteLine(str);
+            }
+          }
           ct.Cancel();
-          Console.WriteLine("cancel called");
           reader.Wait();
-          Console.WriteLine("reader done");
         } catch(AggregateException ae) {
           foreach(var err in ae.InnerExceptions) {
+            if(err is OperationCanceledException) { continue; }
             Console.WriteLine("{0}: {1}: {2}", ae.Message, err.GetType().Name, err.Message);
+            Console.WriteLine(err.StackTrace);
           }
+        }
+        Console.WriteLine("last read");
+        while(retQue.Count > 0 && retQue.TryDequeue(out readBuf)) { // last
+          var str = System.Text.Encoding.ASCII.GetString(readBuf);
+          Console.WriteLine(str);
         }
       }
       Console.WriteLine("Done!");
