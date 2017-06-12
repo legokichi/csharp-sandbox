@@ -11,14 +11,59 @@ namespace csharpsandbox {
     public static void Main(string[] args) {
       var sw = new Stopwatch();
       sw.Start();
-      //AsyncMain().Wait();
-      ParalellSandbox();
-      sw.Stop();
+      //AsyncFIFOSandbox().Wait();
+      //ParalellSandbox().Wait();
+      //AsyncSandbox().Wait();
+      AsyncPipeSandbox().Wait();
+			sw.Stop();
       Console.WriteLine(String.Format("{0}ms", sw.ElapsedMilliseconds));
       Console.WriteLine("finish");
     }
 
-    static async Task AsyncMain() {
+    static async Task AsyncPipeSandbox() {
+      using(var ct = new CancellationTokenSource()){
+				var reader = new Task(() => {
+					Console.WriteLine("starting task");
+					var proc = new Process();
+					proc.StartInfo.FileName = @"node";
+					proc.StartInfo.Arguments = @"-e 'setInterval(()=>process.stdout.write(""""+Date.now()+""\n""),1000);'";
+					proc.StartInfo.UseShellExecute = false;
+					proc.StartInfo.RedirectStandardInput = true;
+					proc.StartInfo.RedirectStandardOutput = true;
+					proc.Start();
+					Console.WriteLine("proc started");
+					using(var br = new BinaryReader(proc.StandardOutput.BaseStream)) {
+						try {
+							while(!ct.IsCancellationRequested) {
+								var bytes = br.ReadBytes(1);
+								var str = System.Text.Encoding.ASCII.GetString(bytes);
+								Console.Write(str);
+							}
+							proc.Close();
+							ct.Token.ThrowIfCancellationRequested();
+						} catch(EndOfStreamException err) {
+							Console.WriteLine("Error writing the data.\n{0}", err.GetType().Name);
+							proc.Close();
+						}
+					}
+				});
+				reader.Start();
+				Console.WriteLine("task started");
+				await Task.Delay(10 * 1000);
+				try {
+					ct.Cancel();
+					reader.Wait();
+				} catch(AggregateException ae) {
+					foreach(var err in ae.InnerExceptions) {
+						Console.WriteLine(ae.Message + ": " + err.Message);
+					}
+				}
+      }
+			Console.WriteLine("Done!");
+			return;
+    }
+
+    static async Task AsyncFIFOSandbox() {
       Func<Task> mkfifo = async () => {
         var proc = new Process();
         proc.StartInfo.FileName = @"mkfifo";
@@ -90,18 +135,18 @@ namespace csharpsandbox {
     static void ParalellSandbox(){
       // for(int i=0; i<100; i++)
       Parallel.For(0, 100, (i) => {
-        Console.Write(String.Format("{0}", i));
+        Console.WriteLine(String.Format("{0}", i));
       });
 
       var arr = new string[] { "test1", "test2", "test3" };
       Parallel.ForEach(arr, (line)=>{
-        Console.Write(line);
+        Console.WriteLine(line);
       });
 
       var lst = new List<string>(arr);
 
 			Parallel.ForEach(lst, (line) => {
-				Console.Write(line);
+				Console.WriteLine(line);
 			});
     }
 
